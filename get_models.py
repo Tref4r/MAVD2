@@ -3,6 +3,7 @@ import torch
 import numpy as np
 import torch.utils.data as data
 import config.options as options
+from history import History
 
 from train_test.train import *
 from train_test.test import *
@@ -56,6 +57,9 @@ if __name__ == "__main__":
 
     gt = np.load(args.gt)
 
+    history = History()
+    history.save_to_csv('d:\\MAVD2\\training_history.csv')  # Tạo file CSV trước khi lưu dữ liệu
+
     for step in range(1, args.num_steps + 1):
 
         if (step-1) % len(train_loader) == 0:
@@ -92,4 +96,8 @@ if __name__ == "__main__":
                 torch.save(va_net.state_dict(), os.path.join(args.save_model_path, "va_model.pth"))
                 torch.save(vf_net.state_dict(), os.path.join(args.save_model_path, "vf_model.pth"))
                 torch.save(vaf_net.state_dict(), os.path.join(args.save_model_path, "vaf_model.pth"))
-            
+
+        if test_info["m_ap"]:
+            history.update(step, test_info["m_ap"][-1], step, loss_dict_list["U_MIL_loss"], loss_dict_list_disl["MA_loss"], loss_dict_list_disl["M_MIL_loss"], loss_dict_list_disl["Triplet_loss"], current_lr)
+            history.save_to_csv('d:\\MAVD2\\training_history.csv')
+
