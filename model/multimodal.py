@@ -41,6 +41,26 @@ class MIL(nn.Module):
         mmil_logits = self.filter(avf_out, seq_len)
         return mmil_logits, avf_out    
 
+class GatedMultimodalFusion(nn.Module):
+    def __init__(self, input_dim):
+        super(GatedMultimodalFusion, self).__init__()
+        self.gate = nn.Sequential(
+            nn.Linear(input_dim, input_dim),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x1, x2):
+        gate = self.gate(x1)
+        return gate * x1 + (1 - gate) * x2
+
+class ResidualFusionBlock(nn.Module):
+    def __init__(self, input_dim):
+        super(ResidualFusionBlock, self).__init__()
+        self.fc = nn.Linear(input_dim, input_dim)
+
+    def forward(self, x):
+        return x + self.fc(x)
+
 class Multimodal(Module):
     def __init__(self, input_size, h_dim=32, feature_dim=64):
         super().__init__()
@@ -50,16 +70,19 @@ class Multimodal(Module):
         self.tcn = TCNModel(input_size=feature_dim, num_channels=[feature_dim, feature_dim, feature_dim])
 
         self.mil = MIL(input_dim=feature_dim, h_dim=h_dim)
-
+        self.gated_fusion = GatedMultimodalFusion(feature_dim)
+        self.residual_fusion = ResidualFusionBlock(feature_dim)
 
     def forward(self, data, seq_len=None):
 
         data = self.embedding(data)
         data = self.tcn(data)
+        data = self.gated_fusion(data, data)
+        data = self.residual_fusion(data)
 
         output, avf_out = self.mil(data, seq_len)
             
         return {"output": output,
                 "avf_out": avf_out,
                 "satt_f": data}
-    
+
