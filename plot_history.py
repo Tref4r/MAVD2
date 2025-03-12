@@ -16,14 +16,20 @@ ax1.plot(df['iteration'], df['MA_loss'], label='MA_loss')
 ax1.plot(df['iteration'], df['M_MIL_loss'], label='M_MIL_loss')
 ax1.plot(df['iteration'], df['Triplet_loss'], label='Triplet_loss')
 
+# Adding learning rate plot
+ax3 = ax1.twinx()
+ax3.plot(df['iteration'], df['LR'], label='Learning Rate', linestyle='dashed', color='green')
+ax3.set_ylabel('Learning Rate')
+ax3.spines['right'].set_position(('outward', 60))
+
 ax1.set_xlabel('Iteration')
 ax1.set_ylabel('Loss')
 
-
-
 # Merge legends
-ax1.legend(loc='upper left', bbox_to_anchor=(1.05, 1))
-ax2.legend(loc='lower left', bbox_to_anchor=(1.05, 0))
+lines, labels = ax1.get_legend_handles_labels()
+lines2, labels2 = ax2.get_legend_handles_labels()
+lines3, labels3 = ax3.get_legend_handles_labels()
+ax1.legend(lines + lines2 + lines3, labels + labels2 + labels3, loc='upper left', bbox_to_anchor=(1.05, 1))
 
 # Adjust layout to avoid overlap
 plt.subplots_adjust(left=0.1, right=0.85, top=0.9, bottom=0.1)

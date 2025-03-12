@@ -45,7 +45,15 @@ def train(v_net, a_net, f_net, va_net, vf_net, vaf_net, dataloader, optimizer, c
 
         total_loss_disl, loss_dict_list_disl = criterion_disl(v_predict, va_output, vf_output, vaf_output, label, seq_len.cuda(), lamda1, lamda2, lamda3)
 
-        total_loss = total_loss + total_loss_disl
+        # Dynamic loss weighting
+        lambda1 = 1.0 / (loss_dict_list["U_MIL_loss"] + 1e-8)
+        lambda2 = 1.0 / (loss_dict_list_disl["MA_loss"] + 1e-8)
+        lambda3 = 1.0 / (loss_dict_list_disl["M_MIL_loss"] + 1e-8)
+
+        total_loss = lambda1 * loss_dict_list["U_MIL_loss"] + \
+                     lambda2 * loss_dict_list_disl["MA_loss"] + \
+                     lambda3 * loss_dict_list_disl["M_MIL_loss"] + \
+                     loss_dict_list_disl["Triplet_loss"]
 
         optimizer.zero_grad()
         total_loss.backward()
@@ -54,4 +62,4 @@ def train(v_net, a_net, f_net, va_net, vf_net, vaf_net, dataloader, optimizer, c
         return loss_dict_list, loss_dict_list_disl
 
 
-        
+

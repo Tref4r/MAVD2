@@ -18,11 +18,11 @@ parser.add_argument('--model_path', type = str, default = 'saved_models/')
 parser.add_argument('--init_path', type = str, default = 'saved_models/init_models/')
 parser.add_argument('--model_file', type = str, default = "model_{}.pkl".format(seed), help = 'the path of pre-trained model file')
 
-parser.add_argument('--lr', type = float, default = 0.0001, help = 'learning rates')
+parser.add_argument('--lr', type = float, default = 0.0003, help = 'learning rates')
 parser.add_argument('--batch_size', type = int, default = 128)
 parser.add_argument('--seed', type = int, default = 500, help = 'random seed (-1 for no manual seed)')
 parser.add_argument('--workers', default=8, help='number of workers in dataloader')
-parser.add_argument('--num_steps', default=1000, help='number of epochs to train for')
+parser.add_argument('--num_steps', default=10000, help='number of epochs to train for')
 
 parser.add_argument('--rgb-list', default='./list/video_train.list', help='list of rgb features')
 parser.add_argument('--flow-list', default='./list/flow_train.list', help='list of flow features')

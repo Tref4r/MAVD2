@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.init as init
 from torch.nn.modules.module import Module
 from model.tcn import TemporalConvNet
+import torch.nn.functional as F
 
 
 class TCNModel(nn.Module):
@@ -56,10 +57,14 @@ class GatedMultimodalFusion(nn.Module):
 class ResidualFusionBlock(nn.Module):
     def __init__(self, input_dim):
         super(ResidualFusionBlock, self).__init__()
-        self.fc = nn.Linear(input_dim, input_dim)
+        self.fc = nn.Linear(input_dim, input_dim, bias=True)
+        self.ln = nn.LayerNorm(input_dim)
 
     def forward(self, x):
-        return x + self.fc(x)
+        residual = x
+        out = F.relu(self.fc(x))
+        out = self.ln(out + residual)  # Skip Connection + LayerNorm
+        return out
 
 class Multimodal(Module):
     def __init__(self, input_size, h_dim=32, feature_dim=64):

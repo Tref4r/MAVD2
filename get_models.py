@@ -14,7 +14,7 @@ from model.multimodal import *
 from model.projection import *
 from dataset.dataset_loader import *
 
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from utils.warmup_lr import WarmUpLR
 from torchsummary import summary  # Install via: pip install torchsummary
 
@@ -64,7 +64,7 @@ if __name__ == "__main__":
     optimizer = torch.optim.Adam(list(v_net.parameters())+list(a_net.parameters())+list(f_net.parameters())+list(va_net.parameters())+list(vf_net.parameters())+list(vaf_net.parameters()), 
                                  lr = args.lr, betas = (0.9, 0.999), weight_decay = 0.0005)
 
-    scheduler = CosineAnnealingLR(optimizer, T_max=args.num_steps)
+    scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=20, T_mult=2, eta_min=1e-6)
     warmup_scheduler = WarmUpLR(optimizer, warmup_steps=100)
 
     criterion = AD_Loss()
@@ -102,7 +102,7 @@ if __name__ == "__main__":
         if step <= 100:
             warmup_scheduler.step()
         else:
-            scheduler.step()
+            scheduler.step(step)
 
         if step % 10 == 0: 
             test(v_net, a_net, f_net, va_net, vf_net, vaf_net,
