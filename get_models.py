@@ -43,7 +43,7 @@ if __name__ == "__main__":
     va_net = va_net.cuda()
     vf_net = vf_net.cuda()
 
-    vaf_net = Multimodal(input_size=128+32+64, h_dim=128, feature_dim=64)
+    vaf_net = Multimodal(input_size=128+32+64, h_dim=128, feature_dim=64, num_heads=8, num_layers=6)
     vaf_net = vaf_net.cuda()
     
     optimizer = torch.optim.Adam(list(v_net.parameters())+list(a_net.parameters())+list(f_net.parameters())+list(va_net.parameters())+list(vf_net.parameters())+list(vaf_net.parameters()), 

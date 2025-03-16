@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.init as init
 from torch.nn.modules.module import Module
-from model.tcn import TemporalConvNet
+from model.self_attention import MultimodalTransformerEncoder
 
 
 class TCNModel(nn.Module):
@@ -42,12 +42,12 @@ class MIL(nn.Module):
         return mmil_logits, avf_out    
 
 class Multimodal(Module):
-    def __init__(self, input_size, h_dim=32, feature_dim=64):
+    def __init__(self, input_size, h_dim=32, feature_dim=64, num_heads=8, num_layers=6):
         super().__init__()
 
         self.embedding = nn.Sequential(nn.Linear(input_size, input_size//2), nn.ReLU(), nn.Dropout(0.0),
                                         nn.Linear(input_size//2, feature_dim), nn.ReLU())
-        self.tcn = TCNModel(input_size=feature_dim, num_channels=[feature_dim, feature_dim, feature_dim])
+        self.transformer = MultimodalTransformerEncoder(feature_dim, num_heads, num_layers)
 
         self.mil = MIL(input_dim=feature_dim, h_dim=h_dim)
 
@@ -55,11 +55,11 @@ class Multimodal(Module):
     def forward(self, data, seq_len=None):
 
         data = self.embedding(data)
-        data = self.tcn(data)
+        data = self.transformer(data)
 
         output, avf_out = self.mil(data, seq_len)
             
         return {"output": output,
                 "avf_out": avf_out,
                 "satt_f": data}
-    
+
