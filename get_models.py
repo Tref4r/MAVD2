@@ -14,8 +14,6 @@ from model.multimodal import *
 from model.projection import *
 from dataset.dataset_loader import *
 
-from torch.optim.lr_scheduler import CosineAnnealingLR
-from utils.warmup_lr import WarmUpLR
 from torchsummary import summary  # Install via: pip install torchsummary
 
 def count_parameters(model):
@@ -49,23 +47,24 @@ if __name__ == "__main__":
     va_net = va_net.cuda()
     vf_net = vf_net.cuda()
 
-    vaf_net = Multimodal(input_size=128+32+64, h_dim=128, feature_dim=64)
+    vaf_net = MultimodalTransformer(input_size=128+32+64, feature_dim=64, nhead=8, num_layers=6, dropout=0.1)
     vaf_net = vaf_net.cuda()
 
-    # Print model architecture before modifications
-    print("Before Modification:")
+    # Print model architecture before training
+    print("Model Architecture Before Training:")
     print(vaf_net)
-    summary(vaf_net, input_size=(args.batch_size, 128+32+64))
-    print("Total Parameters Before:", count_parameters(vaf_net))
 
-    with open("model_architecture_before.txt", "w") as f:
+    print("Total Parameters Before Training:", count_parameters(vaf_net))
+
+    with open("model_architecture_before_training.txt", "w") as f:
         f.write(str(vaf_net))
 
     optimizer = torch.optim.Adam(list(v_net.parameters())+list(a_net.parameters())+list(f_net.parameters())+list(va_net.parameters())+list(vf_net.parameters())+list(vaf_net.parameters()), 
                                  lr = args.lr, betas = (0.9, 0.999), weight_decay = 0.0005)
 
-    scheduler = CosineAnnealingLR(optimizer, T_max=args.num_steps)
-    warmup_scheduler = WarmUpLR(optimizer, warmup_steps=100)
+    # Remove scheduler and warmup_scheduler
+    # scheduler = CosineAnnealingLR(optimizer, T_max=args.num_steps)
+    # warmup_scheduler = WarmUpLR(optimizer, warmup_steps=100)
 
     criterion = AD_Loss()
     criterion_disl = DISL_Loss()
@@ -100,9 +99,11 @@ if __name__ == "__main__":
             )
 
         if step <= 100:
-            warmup_scheduler.step()
+            # warmup_scheduler.step()
+            pass
         else:
-            scheduler.step()
+            # scheduler.step()
+            pass
 
         if step % 10 == 0: 
             test(v_net, a_net, f_net, va_net, vf_net, vaf_net,
@@ -125,11 +126,11 @@ if __name__ == "__main__":
             history.save_to_csv('d:\\MAVD2\\training_history.csv')
 
     # Print model architecture after modifications
-    print("After Modification:")
-    print(vaf_net)
-    summary(vaf_net, input_size=(args.batch_size, 128+32+64))
-    print("Total Parameters After:", count_parameters(vaf_net))
+    # print("After Modification:")
+    # print(vaf_net)
+    # summary(vaf_net, input_size=(args.batch_size, 128+32+64))
+    # print("Total Parameters After:", count_parameters(vaf_net))
 
-    with open("model_architecture_after.txt", "w") as f:
-        f.write(str(vaf_net))
+    # with open("model_architecture_after.txt", "w") as f:
+    #     f.write(str(vaf_net))
 

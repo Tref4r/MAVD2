@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.init as init
 from torch.nn.modules.module import Module
 from model.tcn import TemporalConvNet
+from torch.nn import TransformerEncoder, TransformerEncoderLayer
 
 
 class TCNModel(nn.Module):
@@ -61,28 +62,22 @@ class ResidualFusionBlock(nn.Module):
     def forward(self, x):
         return x + self.fc(x)
 
-class Multimodal(Module):
-    def __init__(self, input_size, h_dim=32, feature_dim=64):
-        super().__init__()
-
-        self.embedding = nn.Sequential(nn.Linear(input_size, input_size//2), nn.ReLU(), nn.Dropout(0.0),
-                                        nn.Linear(input_size//2, feature_dim), nn.ReLU())
-        self.tcn = TCNModel(input_size=feature_dim, num_channels=[feature_dim, feature_dim, feature_dim])
-
-        self.mil = MIL(input_dim=feature_dim, h_dim=h_dim)
-        self.gated_fusion = GatedMultimodalFusion(feature_dim)
-        self.residual_fusion = ResidualFusionBlock(feature_dim)
+class MultimodalTransformer(nn.Module):
+    def __init__(self, input_size, feature_dim=64, nhead=8, num_layers=6, dropout=0.1):
+        super(MultimodalTransformer, self).__init__()
+        self.embedding = nn.Sequential(
+            nn.Linear(input_size, input_size // 2), nn.ReLU(), nn.Dropout(dropout),
+            nn.Linear(input_size // 2, feature_dim), nn.ReLU()
+        )
+        encoder_layers = TransformerEncoderLayer(d_model=feature_dim, nhead=nhead, dropout=dropout)
+        self.transformer_encoder = TransformerEncoder(encoder_layers, num_layers=num_layers)
+        self.mil = MIL(input_dim=feature_dim, h_dim=feature_dim)
 
     def forward(self, data, seq_len=None):
-
         data = self.embedding(data)
-        data = self.tcn(data)
-        data = self.gated_fusion(data, data)
-        data = self.residual_fusion(data)
-
+        data = data.permute(1, 0, 2)  # (batch_size, seq_len, feature_dim) -> (seq_len, batch_size, feature_dim)
+        data = self.transformer_encoder(data)
+        data = data.permute(1, 0, 2)  # (seq_len, batch_size, feature_dim) -> (batch_size, seq_len, feature_dim)
         output, avf_out = self.mil(data, seq_len)
-            
-        return {"output": output,
-                "avf_out": avf_out,
-                "satt_f": data}
+        return {"output": output, "avf_out": avf_out, "satt_f": data}
 
