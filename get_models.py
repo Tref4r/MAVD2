@@ -3,6 +3,7 @@ import torch
 import numpy as np
 import torch.utils.data as data
 import config.options as options
+from history import History
 
 from train_test.train import *
 from train_test.test import *
@@ -13,6 +14,7 @@ from model.multimodal import *
 from model.projection import *
 from dataset.dataset_loader import *
 import time
+from torchsummary import summary
 
 start = time.time()
 
@@ -50,6 +52,9 @@ if __name__ == "__main__":
 
     vafp_net = Multimodal(input_size=128+32+64+64, h_dim=128, feature_dim=64)
     vafp_net = vafp_net.cuda()
+
+    print(vafp_net)
+    summary(vafp_net, input_size=(args.batch_size, 128+32+64+64))
     
     optimizer = torch.optim.Adam(list(v_net.parameters())+list(a_net.parameters())+list(f_net.parameters())+list(p_net.parameters())+list(va_net.parameters())+list(vf_net.parameters())+list(vp_net.parameters())+list(vafp_net.parameters()), 
                                  lr = args.lr, betas = (0.9, 0.999), weight_decay = 0.0005)
@@ -61,6 +66,9 @@ if __name__ == "__main__":
     test_info = {"iteration": [], "m_ap":[]}
 
     gt = np.load(args.gt)
+
+    history = History()
+    history.save_to_csv('./training_history.csv')
 
     b_step = 100
     for step in range(1, args.num_steps + 1):
@@ -105,6 +113,11 @@ if __name__ == "__main__":
                 torch.save(vf_net.state_dict(), os.path.join(args.save_model_path, "vf_model.pth"))
                 torch.save(vp_net.state_dict(), os.path.join(args.save_model_path, "vp_model.pth"))
                 torch.save(vafp_net.state_dict(), os.path.join(args.save_model_path, "vafp_model.pth"))
+       
+        if test_info["m_ap"]:
+            history.update(step, test_info["m_ap"][-1], step, loss_dict_list["U_MIL_loss"], loss_dict_list_disl["MA_loss"], loss_dict_list_disl["M_MIL_loss"], loss_dict_list_disl["Triplet_loss"], current_lr)
+            history.save_to_csv('./training_history.csv')
+
     end = time.time()
     elapsed_time = end - start
     hours, rem = divmod(elapsed_time, 3600)
