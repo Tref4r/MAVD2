@@ -1,30 +1,31 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# Đọc file CSV
+# Read the CSV file
 df = pd.read_csv("./training_history.csv")
 
-# Tạo figure với kích thước lớn hơn
-fig, ax1 = plt.subplots(figsize=(18, 10))  # Increase the figure size
-# Adding secondary y-axis for Accuracy (AP)
-ax2 = ax1.twinx()
-ax2.plot(df['iteration'], df['m_ap'] * 100, label='Accuracy', linestyle='solid', color='purple')
-ax2.set_ylabel('Accuracy', fontsize=14)
-# Subplot 2: Loss values with AP accuracy as secondary y-axis
-ax1.plot(df['iteration'], df['U_MIL_loss'], label='U_MIL_loss')
-ax1.plot(df['iteration'], df['MA_loss'], label='MA_loss')
-ax1.plot(df['iteration'], df['M_MIL_loss'], label='M_MIL_loss')
-ax1.plot(df['iteration'], df['Triplet_loss'], label='Triplet_loss')
+# Create a figure with two subplots
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(18, 12))  # Two subplots stacked vertically
 
-ax1.set_xlabel('Iteration', fontsize=14)
-ax1.set_ylabel('Loss', fontsize=14)
+# Subplot 1: Accuracy (AP)
+ax1.plot(df['iteration'], df['m_ap'] * 100, label='Accuracy', linestyle='solid', color='purple')
 
-# Merge legends
-ax1.legend(loc='upper left', bbox_to_anchor=(1.05, 1), fontsize=12)
-ax2.legend(loc='lower left', bbox_to_anchor=(1.05, 0), fontsize=12)
+ax1.set_ylabel('Accuracy (%)', fontsize=14)
+ax1.legend(fontsize=12)
+ax1.grid(True)
+
+# Subplot 2: Loss values
+ax2.plot(df['iteration'], df['U_MIL_loss'], label='U_MIL_loss')
+ax2.plot(df['iteration'], df['MA_loss'], label='MA_loss')
+ax2.plot(df['iteration'], df['M_MIL_loss'], label='M_MIL_loss')
+ax2.plot(df['iteration'], df['Contrastive_loss'], label='Contrastive_loss')  # Update key
+
+
+ax2.set_xlabel('Iteration', fontsize=14)
+ax2.set_ylabel('Loss', fontsize=14)
+ax2.legend(fontsize=12)
+ax2.grid(True)
 
 # Adjust layout to avoid overlap
-plt.subplots_adjust(left=0.1, right=0.85, top=0.9, bottom=0.1)
-plt.xticks(fontsize=12)
-plt.yticks(fontsize=12)
+plt.tight_layout()
 plt.show()
