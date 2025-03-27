@@ -4,6 +4,34 @@ import torch.nn.init as init
 from torch.nn.modules.module import Module
 from model.tcn import TemporalConvNet
 
+class GatedMultimodalFusion(nn.Module):
+    def __init__(self, input_dim1, input_dim2, output_dim):
+        super(GatedMultimodalFusion, self).__init__()
+        self.fc1 = nn.Linear(input_dim1, output_dim)
+        self.fc2 = nn.Linear(input_dim2, output_dim)
+        self.gate = nn.Sigmoid()
+
+    def forward(self, x1, x2):
+        h1 = self.fc1(x1)
+        h2 = self.fc2(x2)
+        gate = self.gate(h1 + h2)
+        return gate * h1 + (1 - gate) * h2
+
+class ResidualFusionBlock(nn.Module):
+    def __init__(self, input_dim, output_dim):
+        super(ResidualFusionBlock, self).__init__()
+        self.fc = nn.Linear(input_dim, output_dim)
+        self.relu = nn.ReLU()
+        self.layer_norm = nn.LayerNorm(output_dim)  # Add LayerNorm
+        self.skip_connection = nn.Linear(input_dim, output_dim) if input_dim != output_dim else None  # Handle dimension mismatch
+
+    def forward(self, x):
+        residual = self.skip_connection(x) if self.skip_connection else x  # Apply skip connection if dimensions differ
+        out = self.fc(x)
+        out = self.relu(out)
+        out = self.layer_norm(out)
+        out = out + residual  # Add skip connection
+        return out
 
 class TCNModel(nn.Module):
     def __init__(self, input_size, num_channels, kernel_size=2, dropout=0.0):
@@ -15,7 +43,6 @@ class TCNModel(nn.Module):
         f = self.tcn(x)
         f = f.permute(0, 2, 1) 
         return f
-
 
 class MIL(nn.Module):
     def __init__(self, input_dim, h_dim=512, dropout_rate=0.0):
@@ -49,17 +76,23 @@ class Multimodal(Module):
                                         nn.Linear(input_size//2, feature_dim), nn.ReLU())
         self.tcn = TCNModel(input_size=feature_dim, num_channels=[feature_dim, feature_dim, feature_dim])
 
-        self.mil = MIL(input_dim=feature_dim, h_dim=h_dim)
+        self.gmf = GatedMultimodalFusion(feature_dim, feature_dim, feature_dim)
+        self.residual_block = ResidualFusionBlock(feature_dim, feature_dim)
 
+        self.mil = MIL(input_dim=feature_dim, h_dim=h_dim)
 
     def forward(self, data, seq_len=None):
 
         data = self.embedding(data)
         data = self.tcn(data)
 
+        # Apply Gated Multimodal Fusion and Residual Fusion Blocks
+        data = self.gmf(data, data)
+        data = self.residual_block(data)
+
         output, avf_out = self.mil(data, seq_len)
             
         return {"output": output,
                 "avf_out": avf_out,
                 "satt_f": data}
-    
+

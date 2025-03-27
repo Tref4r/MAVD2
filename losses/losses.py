@@ -90,11 +90,22 @@ class AD_Loss(nn.Module):
         return U_MIL_loss, loss_dict
     
 
+class ContrastiveLoss(nn.Module):
+    def __init__(self, margin=1.0):
+        super(ContrastiveLoss, self).__init__()
+        self.margin = margin
+
+    def forward(self, output1, output2, label):
+        euclidean_distance = F.pairwise_distance(output1, output2)
+        loss_contrastive = torch.mean((1 - label) * torch.pow(euclidean_distance, 2) +
+                                      label * torch.pow(torch.clamp(self.margin - euclidean_distance, min=0.0), 2))
+        return loss_contrastive
+
 class DISL_Loss(nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.bce = nn.BCELoss()
-        self.triplet = nn.TripletMarginLoss(margin=5)
+        self.contrastive_loss = ContrastiveLoss()  # Replace CrossEntropyLoss with ContrastiveLoss
 
     def norm(self, data):
         l2 = torch.norm(data, p = 2, dim = -1, keepdim = True)
@@ -116,12 +127,8 @@ class DISL_Loss(nn.Module):
 
         return output_loss
     
-    def cross_entropy_loss(self, q, p):
-        epsilon = 1e-6
-        p = torch.clamp(p, epsilon, 1 - epsilon)
-        q = torch.clamp(q, epsilon, 1 - epsilon)
-        cross_entropy_loss = -torch.mean(p * torch.log(q) + (1 - p) * torch.log(1 - q))
-        return cross_entropy_loss
+    def contrastive_loss_fn(self, q, p, label):
+        return self.contrastive_loss(q, p, label)
 
     def get_alignment_loss(self, v_result, va_result, vf_result, vp_result, seq_len):
         def distance(x, y):
@@ -149,60 +156,29 @@ class DISL_Loss(nn.Module):
         F = vf_result["avf_out"] * seq_matrix
         P = vp_result["avf_out"] * seq_matrix
 
-        ce_VA = self.cross_entropy_loss(V, A)
-        ce_VF = self.cross_entropy_loss(V, F)
-        ce_VP = self.cross_entropy_loss(V, P)
-        ce_AF = self.cross_entropy_loss(A, F)
-        ce_AP = self.cross_entropy_loss(A, P)
-        ce_FP = self.cross_entropy_loss(F, P)
+        ce_VA = self.contrastive_loss_fn(V, A, torch.ones_like(V[:, 0]))
+        ce_VF = self.contrastive_loss_fn(V, F, torch.ones_like(V[:, 0]))
+        ce_VP = self.contrastive_loss_fn(V, P, torch.ones_like(V[:, 0]))
+        ce_AF = self.contrastive_loss_fn(A, F, torch.ones_like(A[:, 0]))
+        ce_AP = self.contrastive_loss_fn(A, P, torch.ones_like(A[:, 0]))
+        ce_FP = self.contrastive_loss_fn(F, P, torch.ones_like(F[:, 0]))
 
         return d_VA + d_VF + d_VP + d_AP + d_AF + d_FP + ce_VA + ce_VF + ce_VP + ce_AF + ce_AP + ce_FP
 
-    def get_triplet_loss(self, vafp_result, label, seq_len):
+    def get_contrastive_loss(self, vafp_result, label):
+        logits = vafp_result["avf_out"]
+        
+        # Ensure label has the same number of dimensions as logits
+        if label.dim() == 1:
+            label = label.unsqueeze(1)  # Add a dimension to make it 2D
 
-        if torch.sum(label) == label.shape[0] or torch.sum(label) == 0:
-            return 0.0
+        # Ensure dimensions match
+        if logits.shape[1] != label.shape[1]:
+            min_dim = min(logits.shape[1], label.shape[1])
+            logits = logits[:, :min_dim]  # Slice logits to match label dimensions
+            label = label[:, :min_dim]  # Slice label to match logits dimensions
 
-        N_label = (label==0)
-        A_label = (label==1)
-
-        sigout = vafp_result["avf_out"]
-        feature = vafp_result["satt_f"]
-
-        N_feature = feature[N_label]
-        A_feature = feature[A_label]
-
-        N_sigout = sigout[N_label]
-        A_sigout = sigout[A_label]
-
-        N_seq_len = seq_len[N_label]
-        A_seq_len = seq_len[A_label]
-
-        anchor = torch.zeros(N_feature.shape[0], N_feature.shape[-1]).cuda()
-        for i in range(N_sigout.shape[0]):
-            _, index = torch.topk(N_sigout[i][:N_seq_len[i]], k=int(N_seq_len[i]), largest=True)
-            tmp = N_feature[i, index, :]
-            anchor[i] = tmp.mean(dim=0)
-        anchor = anchor.mean(dim=0)
-
-        positivte = torch.zeros(A_feature.shape[0], A_feature.shape[-1]).cuda()
-        negative = torch.zeros(A_feature.shape[0], A_feature.shape[-1]).cuda()
-
-        for i in range(A_sigout.shape[0]):
-            _, index = torch.topk(A_sigout[i][:A_seq_len[i]], k=int(A_seq_len[i] // 16 + 1), largest=False)
-            tmp = A_feature[i, index, :]
-            positivte[i] = tmp.mean(dim=0)
-
-            _, index = torch.topk(A_sigout[i][:A_seq_len[i]], k=int(A_seq_len[i] // 16 + 1), largest=True)
-            tmp = A_feature[i, index, :]
-            negative[i] = tmp.mean(dim=0)
-
-        positivte = positivte.mean(dim=0)
-        negative = negative.mean(dim=0)
-            
-        triplet_margin_loss = self.triplet(self.norm(anchor), self.norm(positivte), self.norm(negative))
-
-        return triplet_margin_loss
+        return self.contrastive_loss(logits, label, torch.ones_like(label))  # Use ContrastiveLoss
      
     def forward(self, v_result, va_result, vf_result, vp_result, vafp_result, label, seq_len, lamda1, lamda2, lamda3):
 
@@ -215,13 +191,13 @@ class DISL_Loss(nn.Module):
         ma_loss = self.get_alignment_loss(v_result, va_result, vf_result, vp_result, seq_len)
         ma_loss = ma_loss + 0.01*(a_loss + f_loss + p_loss)
         
-        triplet_loss = self.get_triplet_loss(vafp_result, label, seq_len)
+        contrastive_loss = self.get_contrastive_loss(vafp_result, label)  # Replace CrossEntropyLoss
 
-        total_loss = lamda1*ma_loss + lamda2*rafp_loss + lamda3*triplet_loss
+        total_loss = lamda1*ma_loss + lamda2*rafp_loss + lamda3*contrastive_loss
 
         loss_dict = {}
         loss_dict['MA_loss'] = ma_loss
         loss_dict['M_MIL_loss'] = rafp_loss
-        loss_dict['Triplet_loss'] = triplet_loss
+        loss_dict['Contrastive_loss'] = contrastive_loss  # Update key
 
         return total_loss, loss_dict
