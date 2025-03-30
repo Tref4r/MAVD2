@@ -15,6 +15,22 @@ from model.projection import *
 from dataset.dataset_loader import *
 import time
 from torchsummary import summary
+from torch.optim.lr_scheduler import CosineAnnealingLR
+
+class WarmupScheduler:
+    """Warmup Scheduler to gradually increase the learning rate."""
+    def __init__(self, optimizer, warmup_steps, base_lr):
+        self.optimizer = optimizer
+        self.warmup_steps = warmup_steps
+        self.base_lr = base_lr
+        self.current_step = 0
+
+    def step(self):
+        self.current_step += 1
+        if self.current_step <= self.warmup_steps:
+            lr = self.base_lr * (self.current_step / self.warmup_steps)
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = lr
 
 start = time.time()
 
@@ -61,6 +77,13 @@ if __name__ == "__main__":
             va_net.parameters()) + list(vf_net.parameters()) + list(vp_net.parameters()) + list(vafp_net.parameters()),
         lr=args.lr, betas=(0.9, 0.999), weight_decay=0.0005)
 
+    # Warmup Scheduler
+    warmup_steps = 500
+    warmup_scheduler = WarmupScheduler(optimizer, warmup_steps, args.lr)
+
+    # Cosine Annealing Scheduler
+    scheduler = CosineAnnealingLR(optimizer, T_max=args.num_steps - warmup_steps)
+
     criterion = AD_Loss()
     criterion_disl = DISL_Loss()
 
@@ -77,6 +100,11 @@ if __name__ == "__main__":
 
         if (step - 1) % len(train_loader) == 0:
             train_loader_iter = iter(train_loader)
+
+        if step <= warmup_steps:
+            warmup_scheduler.step()
+        else:
+            scheduler.step()
 
         loss_dict_list, loss_dict_list_disl = train(v_net, a_net, f_net, p_net, va_net, vf_net, vp_net, vafp_net,
                                                     train_loader_iter,
