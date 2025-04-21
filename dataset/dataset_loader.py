@@ -1,7 +1,7 @@
 import torch.utils.data as data
 import numpy as np
 import utils.utils as utils
- 
+
 class Dataset(data.Dataset):
     def __init__(self, args, transform=None, test_mode=False, return_name=False):
         if test_mode:
@@ -59,5 +59,10 @@ class Dataset(data.Dataset):
     def __len__(self):
         return len(self.list)
 
-    
+    # Add a method to handle real-time data
+    def from_frames(self, frames, max_seqlen):
+        frames = utils.process_feat(frames, max_seqlen, is_random=False)
+        return frames
+
+
 
