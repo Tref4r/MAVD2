@@ -9,10 +9,20 @@ from model.multimodal import Multimodal
 from model.projection import Projection
 from utils.utils import process_feat
 import matplotlib.pyplot as plt
-import random
-import os
-import torch.backends.cudnn as cudnn
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+import random
+import torch.backends.cudnn as cudnn
+
+def set_seed(seed=42):
+    """
+    Set random seed for reproducibility.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    cudnn.deterministic = True
+    cudnn.benchmark = False
 
 def extract_frames(video_path, frame_skip=16):
     cap = cv2.VideoCapture(video_path)
@@ -52,10 +62,16 @@ def extract_features(frames):
 
     features = []
     with torch.no_grad():
-        for frame in frames:
-            frame_tensor = transform(frame).unsqueeze(0).cuda()  # Add batch dimension
-            feature = resnet(frame_tensor)
-            features.append(feature.squeeze(0).cpu().numpy())  # Remove the extra batch dimension
+        for i, frame in enumerate(frames):
+            try:
+                frame_tensor = transform(frame).unsqueeze(0).cuda()  # Add batch dimension
+                feature = resnet(frame_tensor)
+                features.append(feature.squeeze(0).cpu().numpy())  # Remove the extra batch dimension
+            except Exception as e:
+                print(f"Error processing frame {i}: {e}")
+
+    if len(features) == 0:
+        raise RuntimeError("No features were extracted. Check the input frames or the ResNet model.")
 
     return np.array(features)
 
@@ -79,60 +95,6 @@ def load_models(model_path):
     vafp_net.load_state_dict(torch.load(f"{model_path}/vafp_model.pth"))
 
     return v_net, a_net, f_net, p_net, va_net, vf_net, vp_net, vafp_net
-
-def normalize_tensor(tensor):
-    """
-    Normalize a tensor to have values between 0 and 1.
-    """
-    min_val = tensor.min(dim=-1, keepdim=True)[0]
-    max_val = tensor.max(dim=-1, keepdim=True)[0]
-    return (tensor - min_val) / (max_val - min_val + 1e-8)
-
-def normalize_predictions(predictions):
-    """
-    Normalize predictions to a fixed range [0, 1] and enhance contrast.
-    """
-    min_val = np.min(predictions)
-    max_val = np.max(predictions)
-    if max_val - min_val == 0:
-        return np.zeros_like(predictions)  # Avoid division by zero
-    normalized = (predictions - min_val) / (max_val - min_val)
-    return normalized  # Remove squaring to avoid overly compressing values
-
-def apply_temperature_scaling(predictions, temperature=1.0):
-    """
-    Apply temperature scaling to calibrate predictions.
-    """
-    predictions = np.exp(predictions / temperature)
-    return predictions / np.sum(predictions)
-
-def smooth_predictions(predictions, alpha=0.05):
-    """
-    Apply exponential smoothing to predictions.
-    """
-    smoothed = np.zeros_like(predictions)
-    smoothed[0] = predictions[0]
-    for t in range(1, len(predictions)):
-        smoothed[t] = alpha * predictions[t] + (1 - alpha) * smoothed[t - 1]
-    return smoothed
-
-def log_predictions(predictions):
-    """
-    Log statistics of predictions for debugging.
-    """
-    print(f"Predictions: {predictions}")
-    print(f"Mean: {np.mean(predictions):.4f}, Std: {np.std(predictions):.4f}, Min: {np.min(predictions):.4f}, Max: {np.max(predictions):.4f}")
-
-def set_seed(seed=42):
-    """
-    Set random seed for reproducibility.
-    """
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    cudnn.deterministic = True
-    cudnn.benchmark = False
 
 def load_ground_truth(gt_path, frame_skip, num_predictions):
     """
@@ -159,6 +121,14 @@ def evaluate_predictions(predictions, ground_truth, threshold=0.5):
     recall = recall_score(ground_truth, binary_predictions, zero_division=0)
     f1 = f1_score(ground_truth, binary_predictions, zero_division=0)
     return accuracy, precision, recall, f1
+
+def normalize_tensor(tensor):
+    """
+    Normalize a tensor to have values between 0 and 1.
+    """
+    min_val = tensor.min(dim=-1, keepdim=True)[0]
+    max_val = tensor.max(dim=-1, keepdim=True)[0]
+    return (tensor - min_val) / (max_val - min_val + 1e-8)
 
 def infer_on_video(video_path, model_path, gt_path, frame_skip=16):
     """
@@ -211,22 +181,13 @@ def infer_on_video(video_path, model_path, gt_path, frame_skip=16):
         f_res = normalize_tensor(f_net(flow_features)["satt_f"])
         p_res = normalize_tensor(p_net(pose_features)["satt_f"])
 
-        # Log intermediate features for debugging
-        print(f"Intermediate features:\n v_res: {v_res}\n a_res: {a_res}\n f_res: {f_res}\n p_res: {p_res}")
-
         mix_f = torch.cat([v_res, va_net(a_res), vf_net(f_res), vp_net(p_res)], dim=-1)
         m_out = vafp_net(mix_f)
 
         predictions = m_out["output"].cpu().numpy()
 
-        # Normalize predictions dynamically
-        predictions = normalize_predictions(predictions)
-
-        # Disable smoothing for debugging
-        # predictions = smooth_predictions(predictions, alpha=0.05)
-
-        # Log predictions
-        log_predictions(predictions)
+        # Normalize predictions
+        predictions = (predictions - predictions.min()) / (predictions.max() - predictions.min())
 
         # Load and subsample ground truth
         ground_truth = load_ground_truth(gt_path, frame_skip, len(predictions))
@@ -239,7 +200,7 @@ def infer_on_video(video_path, model_path, gt_path, frame_skip=16):
               f"Recall: {recall:.4f}\n"
               f"F1-Score: {f1:.4f}")
 
-        return predictions, frames, accuracy, precision, recall, f1
+        return predictions, frames
 
 def visualize_predictions(frames, predictions):
     """
@@ -248,17 +209,78 @@ def visualize_predictions(frames, predictions):
     for i, frame in enumerate(frames):
         plt.figure(figsize=(8, 6))
         plt.imshow(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))  # Convert BGR to RGB for Matplotlib
-        plt.title(f"Frame {i + 1} - Prediction: {predictions[i]:.2f}%", fontsize=16)
+        plt.title(f"Frame {i + 1} - Prediction: {predictions[i]:.2f}", fontsize=16)
         plt.axis('off')
         plt.show()
+
+def plot_predictions_with_graph(frames, predictions, frame_skip, output_path):
+    """
+    Plot anomaly scores over time with 3 frames from the beginning, middle, and end of the video.
+    Each frame in the beginning, middle, and end sections is spaced 5 frames apart.
+    Frames are displayed in a single row, aligned in chronological order.
+    """
+    plt.figure(figsize=(18, 6))
+
+    # Plot the anomaly scores
+    time = np.arange(len(predictions)) * frame_skip
+    plt.plot(time, predictions, label="Anomaly Score", color="blue", linewidth=2)
+
+    # Highlight regions with high and low anomaly scores
+    threshold = 0.5
+    high_anomaly_indices = np.where(predictions > threshold)[0]
+    low_anomaly_indices = np.where(predictions <= threshold)[0]
+
+    # Highlight low anomaly regions
+    for idx in low_anomaly_indices:
+        plt.axvspan(time[idx] - frame_skip / 2, time[idx] + frame_skip / 2, color="green", alpha=0.1, label="Low Anomaly" if idx == low_anomaly_indices[0] else "")
+
+    # Highlight high anomaly regions
+    for idx in high_anomaly_indices:
+        plt.axvspan(time[idx] - frame_skip / 2, time[idx] + frame_skip / 2, color="red", alpha=0.3, label="High Anomaly" if idx == high_anomaly_indices[0] else "")
+
+    # Select 3 frames from the beginning, middle, and end, spaced 5 frames apart
+    num_frames = len(frames)
+    selected_indices = [
+        0, min(5, num_frames - 1), min(10, num_frames - 1),  # First 3 frames spaced 5 apart
+        max(num_frames // 2 - 5, 0), num_frames // 2, min(num_frames // 2 + 5, num_frames - 1),  # Middle 3 frames spaced 5 apart
+        max(num_frames - 11, 0), max(num_frames - 6, 0), num_frames - 1  # Last 3 frames spaced 5 apart
+    ]
+
+    # Overlay frames at specific points
+    for i, idx in enumerate(selected_indices):
+        frame = frames[idx]
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        # Place frames in a single row at the center of the plot
+        y_position = 0.5  # Center of the plot
+        inset_ax = plt.axes([0.1 + (i / len(selected_indices)) * 0.8, y_position, 0.08, 0.15])  # Adjust width and height
+        inset_ax.imshow(frame_rgb)
+        inset_ax.axis('off')  # Hide axes for the frame
+
+    # Fix the Y limits to make everything fit visually
+    plt.ylim(0, 1.05)
+
+    # Add labels and legend
+    plt.xlabel("Time (frames)", fontsize=14)
+    plt.ylabel("Anomaly Score", fontsize=14)
+    plt.legend(fontsize=12, loc="upper left")
+    plt.grid(True)
+
+    # Save and show
+    plt.subplots_adjust(left=0.05, right=0.95, top=0.85, bottom=0.15)  # Adjust layout to avoid warnings
+    plt.savefig(output_path.replace(".mp4", "_graph.png"))
+    plt.show()
+
 
 if __name__ == "__main__":
     video_path = r"C:\Users\tatra\Downloads\The Most UNEXPECTED Finishes in UFC History 😱.mp4"
     model_path = "saved_models/84.98/"
     gt_path = r"D:\MAVD2\list\gt.npy"
+    output_path = r"c:\Users\tatra\Downloads\output_video.mp4"
 
-    # Perform inferencegt_path)
-    predictions, frames, accuracy, precision, recall, f1 = infer_on_video(video_path, model_path, gt_path)
+    # Perform inference
+    predictions, frames = infer_on_video(video_path, model_path, gt_path)
 
-    # Visualize predictions on frames
-    visualize_predictions(frames, predictions)
+    # Plot predictions with graph
+    frame_skip = 16
+    plot_predictions_with_graph(frames, predictions, frame_skip, output_path)
