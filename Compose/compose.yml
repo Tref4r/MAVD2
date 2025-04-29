@@ -1,0 +1,42 @@
+services:
+  fusion:
+    image: fusion:latest
+    build:
+      context: ../fusion
+      dockerfile: ./Docker/Dockerfile
+    container_name: fusion_container
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ../fusion:/workspace/fusion
+    shm_size: '4gb'
+    networks:
+      - app_network
+
+  mmaction:
+    image: mmaction:latest
+    build: 
+      context: ../mmaction
+      dockerfile: ./Docker/Dockerfile
+    container_name: mmaction_container
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ../mmaction:/workspace/mmaction
+    ports:
+      - "8000:8000"  
+    stdin_open: true
+    shm_size: '4gb'
+    networks:
+      - app_network
+    restart: always
+
+networks:
+  app_network:
+    driver: bridge

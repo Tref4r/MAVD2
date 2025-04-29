@@ -1,0 +1,22 @@
+{
+    "skeleton_stdet_checkpoint": "https://download.openmmlab.com/mmaction/skeleton/posec3d/posec3d_ava.pth",
+    "det_config": "model/det/rtmdet_tiny_8xb32-300e_coco.py",
+    "det_checkpoint": "https://download.openmmlab.com/mmdetection/v3.0/rtmdet/rtmdet_tiny_8xb32-300e_coco/rtmdet_tiny_8xb32-300e_coco_20220902_112414-78e30dcc.pth",
+    "pose_config": "model/pose/rtmo-s_8xb32-600e_coco-640x640.py",
+    "pose_checkpoint": "https://download.openmmlab.com/mmpose/v1/projects/rtmo/rtmo-s_8xb32-600e_coco-640x640-8db55a59_20231211.pth",
+    "skeleton_config": "configs/skeleton/posec3d/slowonly_r50_8xb16-u48-240e_gym-keypoint.py",
+    "skeleton_checkpoint": "https://download.openmmlab.com/mmaction/v1.0/skeleton/posec3d/slowonly_r50_8xb16-u48-240e_gym-keypoint/slowonly_r50_8xb16-u48-240e_gym-keypoint_20220815-da338c58.pth",
+    "use_skeleton_stdet": true,
+    "use_skeleton_recog": true,
+    "det_score_thr": 0.9,
+    "action_score_thr": 0.4,
+    "video": "demo/test_video_structuralize.mp4",
+    "label_map": "label_map/label_map_gym.txt",
+    "device": "cuda:0",
+    "out_filename": "demo/test_stdet_recognition_output.mp4",
+    "predict_stepsize": 8,
+    "output_stepsize": 1,
+    "output_fps": 24,
+    "cfg_options": {},
+    "input_data": "Processed_Videos/3320-3954/v=-uaaOVNBQJI___1_label_B4-0-0.mp4"
+}

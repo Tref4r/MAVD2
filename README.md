@@ -1,65 +1,182 @@
-# MAVD
- Aligning First, Then Fusing: A Novel Weakly Supervised Multimodal Violence Detection Method  
+# MFT
+  Multi-Modal Fusion Techniques for Abnormal Events
+  Detection in Videos
 
-
- <p align="center">
-    <img src=img.png width="800" height="300"/>
+<p align="center">
+    <img src=pipeline_violence.png width="800" height="300"/>
 </p>
 
- [Paper](https://arxiv.org/abs/2501.07496)
 
 ## Abstract
-Weakly supervised violence detection refers to the technique of training models to identify violent segments in videos using only video-level labels. Among these approaches, multimodal violence detection, which integrates modalities such as audio and optical flow, holds great potential. Existing methods in this domain primarily focus on designing multimodal fusion models to address modality discrepancies. In contrast, we take a different approach; leveraging the inherent discrepancies across modalities in violence event representation to propose a novel multimodal semantic feature alignment method. This method sparsely maps the semantic features of local, transient, and less informative modalities ( such as audio and optical flow ) into the more informative RGB semantic feature space. Through an iterative process, the method identifies the suitable no-zero feature matching subspace and aligns the modality-specific event representations based on this subspace, enabling the full exploitation of information from all modalities during the subsequent modality fusion stage. Building on this, we design a new weakly supervised violence detection framework that consists of unimodal multiple-instance learning for extracting unimodal semantic features, multimodal alignment, multimodal fusion, and final detection. Experimental results on benchmark datasets demonstrate the effectiveness of our method, achieving an average precision (AP) of 86.07% on the XD-Violence dataset. Our code is available at https://github.com/xjpp2016/MAVD.
-
-## Requirements  
-
-    python
-    torch
-    numpy
-    tqdm
-    scikit-learn
-    einops
-
-
-## Training
-
-    python get_models.py 
+With the rapid increase in video data and the growing need for security and public safety, detecting abnormal
+events in videos has become increasingly important. In recent years, deep learning techniques have been
+extensively applied to improve automatic anomaly detection systems. Abnormal events often manifest through
+multiple modalities such as appearance, motion, audio signals, and human pose, highlighting the need for
+effective multimodal feature extraction and integration. However, existing fusion mechanisms often struggle
+with aligning heterogeneous features and fully leveraging cross-modal information. We experimented with
+several commonly used multimodal fusion techniques and applied an adaptive framework that integrates
+RGB, optical flow, audio, and pose modalities while enhancing semantic consistency across modalities. Our
+approach dynamically regulates the contribution of each modality based on contextual relevance to improve
+anomaly detection performance.
 
 
+## Requirements
 
-## Testing
+### System Requirements
+- Docker Engine
+- NVIDIA Docker toolkit
+- NVIDIA GPU with CUDA support
+- At least 8GB of GPU memory
+- At least 4GB of system memory
 
-    python get_result.py
+Our Docker images are built with:
+- CUDA 11.8 with cuDNN 8 (fusion service)
+- CUDA 11.3 with cuDNN 8 (mmaction service)
+- PyTorch 2.2.1 (fusion service)
+- PyTorch 1.12.1 (mmaction service)
 
+## Quick Start
 
-## Pre-trained Alignment Models
+```bash
+# Clone the repository
+git clone https://github.com/Tref4r/MAVD2.git
+cd MAVD2
+git checkout release/1.0
 
-    import torch
+# Start the services
+docker compose -f Compose/compose.yml up --build -d
+```
 
-    # Load the pre-trained models
-    v_net = torch.jit.load("./saved_models/pt/v_model.pt").cuda()
-    a_net = torch.jit.load( "./saved_models/pt/a_model.pt").cuda()
-    f_net = torch.jit.load("./saved_models/pt/f_model.pt").cuda()
+The system consists of two Docker services:
+1. `fusion`: Main violence detection service
+2. `mmaction`: Pose extraction service
 
-    va_net = torch.jit.load("./saved_models/pt/va_model.pt").cuda()
-    vf_net = torch.jit.load("./saved_models/pt/vf_model.pt").cuda()
+## Project Structure
 
-    # Get the alligned features
-    feature_RGB = v_net(feature_RGB from backbone)
-    feature_audio = va_net(a_net(feature_audio from backbone))
-    feature_flow = vf_net(f_net(feature_flow from backbone))
+```
+├── Compose/                # Docker compose configuration
+│   └── compose.yml        # Services orchestration
+│
+├── fusion/                 # Violence Detection Component
+│   ├── model/             # Core model implementations
+│   │   ├── multimodal.py  # Multimodal fusion architecture
+│   │   ├── unimodal.py    # Single modality networks
+│   │   ├── projection.py  # Feature projection modules
+│   │   ├── tcn.py        # Temporal modeling
+│   │   └── self_attention.py  # Attention mechanisms
+│   ├── dataset/           # Dataset handling
+│   │   └── dataset_loader.py
+│   ├── config/            # Configuration files
+│   │   ├── options.py     # Training options
+│   │   └── options_test.py # Testing options
+│   ├── losses/            # Loss functions
+│   ├── utils/             # Utility functions
+│   ├── Docker/            # Docker configuration
+│   ├── Model/             # Pre-trained models
+│   │   ├── Model_extract/ # Feature extraction models
+│   │   │   ├── flow_imagenet.pt
+│   │   │   ├── i3d_rgb_imagenet.pt
+│   │   │   └── vggish-10086976.pth
+│   │   └── Model_Infer/   # Inference models
+│   │       ├── v_model.pth    # RGB model
+│   │       ├── a_model.pth    # Audio model
+│   │       ├── f_model.pth    # Flow model
+│   │       ├── p_model.pth    # Pose model
+│   │       └── *_model.pth    # Combined models
+│   ├── list/              # Data lists
+│   │   ├── video_train.list
+│   │   ├── video_test.list
+│   │   └── gt.npy         # Ground truth labels
+│   └── train_test/        # Training and testing scripts
+│       ├── train.py
+│       └── test.py
+│
+└── mmaction/              # Pose Extraction Component
+    ├── mmaction/          # Core MMAction library
+    │   ├── apis/          # APIs
+    │   ├── models/        # Model implementations
+    │   ├── datasets/      # Dataset processing
+    │   └── utils/         # Utilities
+    ├── configs/           # Model configurations
+    │   ├── _base_/        # Base configs
+    │   └── skeleton/      # Pose-related configs
+    ├── model/             # Pre-trained models
+    │   ├── det/           # Detection models
+    │   └── pose/          # Pose estimation models
+    └── Docker/            # Docker configuration
+```
+
+Key Files:
+- `get_models.py`: Main training script
+- `get_result.py`: Evaluation script
+- `video_inference.py`: Single video inference
+- `video_inference_visualization.py`: Results visualization
+- `extract_feats_pose_api.py`: Pose feature extraction API
+- `main.py`: MMAction service entry point
+
+## Usage
+
+### Training
+
+Training is done within the fusion container:
+
+```bash
+# Enter the fusion container
+docker exec -it fusion_container bash
+
+# Run training
+python get_models.py
+```
+
+### Testing
+
+Testing can be performed inside the fusion container:
+
+```bash
+# Enter the fusion container
+docker exec -it fusion_container bash
+
+# Run evaluation
+python get_result.py
+```
+
+### Single Video Inference
+
+For running inference on a single video:
+
+```bash
+# Enter the fusion container
+docker exec -it fusion_container bash
+
+# Run inference
+python video_inference.py
+```
+
+### Viewing Results
+
+Results and model outputs are saved in the mounted volumes:
+- Model checkpoints: `fusion/Model/`
+- Pose features: `fusion/pose_feats/`
+- Evaluation results: Will be displayed in the terminal output
 
 
 ## Citation
+
 If you find this repo useful for your research, please consider citing our paper:
 ```
-@article{jin2025aligning,
-  title={Aligning First, Then Fusing: A Novel Weakly Supervised Multimodal Violence Detection Method},
-  author={Jin, Wenping and Zhu, Li and Sun, Jing},
-  journal={arXiv preprint arXiv:2501.07496},
+@unpublished{tung2025multi,
+  title={Multi-Modal Fusion Techniques for Abnormal Events Detection in Videos},
+  author={Ta Tran Thanh Tung, Dinh Cong Binh, Vu Minh Hoang, Tran Minh Hoan, Vuong Tu Binh},
   year={2025}
 }
 ```
 
 ## Acknowledgements
-Some of the code is derived from [UR-DMU](https://github.com/henrryzh1/UR-DMU) and [MSBT](https://github.com/shengyangsun/MSBT). We sincerely thank the authors for their valuable contributions.
+
+
+This project builds upon several excellent works:
+- [MAVD](https://github.com/xjpp2016/MAVD)
+- [mmaction2](https://github.com/open-mmlab/mmaction2)
+
+We sincerely thank the authors of these projects for their valuable contributions.
+

@@ -1,0 +1,7 @@
+XDData/
+__pycache__/
+*.txt
+*.pth
+interpolate.py
+test.py
+!train_test/test.py
