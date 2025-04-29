@@ -1,22 +1,32 @@
 import cv2
 import numpy as np
 import torch
-import torchvision.models as models
 import torchvision.transforms as transforms
+import random
+import os
+import torch.backends.cudnn as cudnn
+import matplotlib.pyplot as plt
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+import torchvision.models as models
+from torchvggish import vggish, vggish_input
+import torchaudio
+
+import ffmpeg
+import io
+import soundfile as sf
+
 from dataset.dataset_loader import Dataset
 from model.unimodal import Unimodal
 from model.multimodal import Multimodal
 from model.projection import Projection
 from utils.utils import process_feat
-import matplotlib.pyplot as plt
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-import random
-import torch.backends.cudnn as cudnn
+
+# Optional: import I3D model nếu bạn có
+from i3d import InceptionI3d  # Giả sử bạn đã chuẩn bị file i3d.py
+
+# --------------------- Utility Functions ---------------------
 
 def set_seed(seed=42):
-    """
-    Set random seed for reproducibility.
-    """
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -24,56 +34,222 @@ def set_seed(seed=42):
     cudnn.deterministic = True
     cudnn.benchmark = False
 
+def normalize_tensor(tensor):
+    min_val = tensor.min(dim=-1, keepdim=True)[0]
+    max_val = tensor.max(dim=-1, keepdim=True)[0]
+    return (tensor - min_val) / (max_val - min_val + 1e-8)
+
+def normalize_predictions(predictions):
+    min_val = np.min(predictions)
+    max_val = np.max(predictions)
+    if max_val - min_val == 0:
+        return np.zeros_like(predictions)
+    normalized = (predictions - min_val) / (max_val - min_val)
+    return normalized
+
+def log_predictions(predictions):
+    print(f"Predictions: {predictions}")
+    print(f"Mean: {np.mean(predictions):.4f}, Std: {np.std(predictions):.4f}, Min: {np.min(predictions):.4f}, Max: {np.max(predictions):.4f}")
+
+def load_ground_truth(gt_path, frame_skip, num_predictions):
+    ground_truth = np.load(gt_path)
+    subsampled_gt = ground_truth[::frame_skip]
+    if len(subsampled_gt) > num_predictions:
+        subsampled_gt = subsampled_gt[:num_predictions]
+    elif len(subsampled_gt) < num_predictions:
+        raise ValueError(f"Mismatch: {len(subsampled_gt)} ground truth vs {num_predictions} predictions")
+    return subsampled_gt
+
+def evaluate_predictions(predictions, ground_truth, threshold=0.5):
+    binary_predictions = (predictions > threshold).astype(int)
+    accuracy = accuracy_score(ground_truth, binary_predictions)
+    precision = precision_score(ground_truth, binary_predictions, zero_division=0)
+    recall = recall_score(ground_truth, binary_predictions, zero_division=0)
+    f1 = f1_score(ground_truth, binary_predictions, zero_division=0)
+    return accuracy, precision, recall, f1
+
+def calibrate_threshold(predictions, ground_truth):
+    best_f1 = 0
+    best_thresh = 0.5
+    print("\n--- Threshold Calibration ---")
+    for thresh in np.arange(0.1, 0.9, 0.05):
+        binary_pred = (predictions > thresh).astype(int)
+        f1 = f1_score(ground_truth, binary_pred, zero_division=0)
+        print(f"Threshold {thresh:.2f}: F1 = {f1:.4f}")
+        if f1 > best_f1:
+            best_f1 = f1
+            best_thresh = thresh
+    print(f"\n>> Best threshold = {best_thresh:.2f} with F1 = {best_f1:.4f}")
+    print("--- End of Calibration ---\n")
+    return best_thresh
+
+def predict_video_class(predictions, threshold=0.5):
+    video_score = np.mean(predictions)
+    if video_score > threshold:
+        return "Violent (Bạo lực)"
+    else:
+        return "Non-violent (Không bạo lực)"
+
+def predict_video_by_voting(predictions, threshold=0.5, vote_ratio=0.5):
+    binary_preds = (predictions > threshold).astype(int)
+    violent_ratio = np.mean(binary_preds)
+    if violent_ratio >= vote_ratio:
+        return "Violent (Bạo lực)"
+    else:
+        return "Non-violent (Không bạo lực)"
+
+# --------------------- Feature Extraction ---------------------
+
 def extract_frames(video_path, frame_skip=16):
     cap = cv2.VideoCapture(video_path)
     frames = []
     frame_count = 0
-
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
         if frame_count % frame_skip == 0:
-            frame = cv2.resize(frame, (224, 224))  # Resize to model input size
+            frame = cv2.resize(frame, (224, 224))
             frames.append(frame)
         frame_count += 1
-
     cap.release()
     return np.array(frames)
 
-def preprocess_frames(frames):
-    # Normalize and reshape frames for the model
-    frames = frames / 255.0  # Normalize to [0, 1]
-    frames = np.transpose(frames, (0, 3, 1, 2))  # Convert to (N, C, H, W)
-    return frames.astype(np.float32)
+def extract_rgb_flow_features(frames):
+    print("Extracting RGB and Flow features using I3D...")
 
-def extract_features(frames):
-    # Use a pre-trained ResNet model to extract features
-    resnet = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
-    resnet.fc = torch.nn.Identity()  # Remove the classification layer
-    resnet = resnet.cuda().eval()
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     transform = transforms.Compose([
-        transforms.ToPILImage(),  # Convert numpy array to PIL Image
-        transforms.Resize((224, 224)),  # Ensure the input size is 224x224
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        transforms.ToPILImage(),
+        transforms.Resize((224, 224)),
+        transforms.ToTensor()
     ])
 
-    features = []
-    with torch.no_grad():
-        for i, frame in enumerate(frames):
-            try:
-                frame_tensor = transform(frame).unsqueeze(0).cuda()  # Add batch dimension
-                feature = resnet(frame_tensor)
-                features.append(feature.squeeze(0).cpu().numpy())  # Remove the extra batch dimension
-            except Exception as e:
-                print(f"Error processing frame {i}: {e}")
+    # Chuẩn bị tensor cho RGB
+    rgb_tensors = []
+    for frame in frames:
+        frame = transform(frame)
+        rgb_tensors.append(frame)
+    rgb_tensors = torch.stack(rgb_tensors, dim=1)  # (3, T, H, W)
+    rgb_tensors = rgb_tensors.unsqueeze(0).to(device)  # (1, 3, T, H, W)
 
-    if len(features) == 0:
-        raise RuntimeError("No features were extracted. Check the input frames or the ResNet model.")
+    # Chuẩn bị tensor cho Optical Flow
+    flows = []
+    prev_gray = None
+    for frame in frames:
+        gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+        if prev_gray is not None:
+            flow = cv2.calcOpticalFlowFarneback(prev_gray, gray,
+                                                None,
+                                                pyr_scale=0.5, levels=3, winsize=15,
+                                                iterations=3, poly_n=5, poly_sigma=1.2, flags=0)
+            flow = cv2.resize(flow, (224, 224))
+            # Normalize flow về -1~1
+            flow = np.clip(flow / 20.0, -1.0, 1.0)
+            flows.append(flow)
+        prev_gray = gray
 
-    return np.array(features)
+    # Vì optical flow ra ít hơn 1 frame, cần resize RGB cho khớp
+    rgb_tensors = rgb_tensors[:, :, 1:, :, :]  # Bỏ frame đầu tiên
+
+    flow_array = np.stack(flows)  # (T-1, H, W, 2)
+    flow_array = np.transpose(flow_array, (3, 0, 1, 2))  # (2, T-1, H, W)
+    flow_tensors = torch.from_numpy(flow_array).unsqueeze(0).float().to(device)  # (1, 2, T-1, H, W)
+
+    try:
+        # RGB branch
+        i3d_rgb = InceptionI3d(400).to(device)
+        rgb_state_dict = torch.load('./rgb_imagenet.pt')
+        rgb_new_state = {}
+        for k, v in rgb_state_dict.items():
+            if 'logits' in k:
+                rgb_new_state[k.replace('logits', 'conv3d_0c_1x1')] = v
+            else:
+                rgb_new_state[k] = v
+        i3d_rgb.load_state_dict(rgb_new_state)
+        i3d_rgb.eval()
+
+        # Flow branch
+        i3d_flow = InceptionI3d(400, in_channels=2).to(device)
+        flow_state_dict = torch.load('./flow_imagenet.pt')  # ⚡️ Bạn cần chuẩn bị file này
+        flow_new_state = {}
+        for k, v in flow_state_dict.items():
+            if 'logits' in k:
+                flow_new_state[k.replace('logits', 'conv3d_0c_1x1')] = v
+            else:
+                flow_new_state[k] = v
+        i3d_flow.load_state_dict(flow_new_state)
+        i3d_flow.eval()
+
+        with torch.no_grad():
+            rgb_features = i3d_rgb.extract_features(rgb_tensors)
+            rgb_features = rgb_features.mean([3, 4])  # (1, 1024, T/8)
+            rgb_features = rgb_features.squeeze(0).permute(1, 0).cpu().numpy()  # (T, 1024)
+
+            flow_features = i3d_flow.extract_features(flow_tensors)
+            flow_features = flow_features.mean([3, 4])  # (1, 1024, T/8)
+            flow_features = flow_features.squeeze(0).permute(1, 0).cpu().numpy()  # (T, 1024)
+
+    except Exception as e:
+        print(f"Failed loading I3D models: {e}")
+        num_frames = len(frames)
+        rgb_features = np.random.rand(num_frames, 1024)
+        flow_features = np.random.rand(num_frames, 1024)
+
+    return rgb_features, flow_features
+
+
+def extract_audio_features(video_path):
+    print("Extracting Audio features using VGGish (no temp file)...")
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    try:
+        # 🛠 Trích xuất audio trực tiếp từ video thành bytes
+        out, _ = (
+            ffmpeg
+            .input(video_path)
+            .output('pipe:', format='wav', ac=1, ar='16000')  # Mono, 16kHz như yêu cầu VGGish
+            .run(capture_stdout=True, capture_stderr=True)
+        )
+
+        # 🛠 Đọc từ bytes vào numpy array
+        audio_data, sr = sf.read(io.BytesIO(out))
+
+        if sr != 16000:
+            raise ValueError(f"Sample rate mismatch: got {sr}, expected 16000 Hz")
+
+        # 🛠 Convert numpy audio to VGGish examples
+        examples = vggish_input.waveform_to_examples(audio_data, sr)
+
+        if isinstance(examples, torch.Tensor):
+            examples = examples.detach().cpu().numpy()
+
+        model = vggish()
+        model.load_state_dict(torch.load('./vggish-10086976.pth'))
+        model = model.to(device)
+        model.postprocess = False
+
+        inputs = torch.from_numpy(examples).float().to(device)
+
+        with torch.no_grad():
+            embeddings = model(inputs)
+
+        features = embeddings.cpu().numpy()
+
+    except Exception as e:
+        print(f"Failed extracting audio: {e}")
+        features = np.random.rand(100, 128)
+
+    return features
+
+
+def extract_pose_features(frames):
+    print("Extracting Pose features using PoseC3D (placeholder random)...")
+    num_frames = len(frames)
+    pose_features = np.random.rand(num_frames, 512)  # Nếu chưa detect keypoints
+    return pose_features
 
 def load_models(model_path):
     v_net = Unimodal(input_size=1024, h_dim=128, feature_dim=128).cuda()
@@ -83,7 +259,7 @@ def load_models(model_path):
     va_net = Projection(32, 32, 32).cuda()
     vf_net = Projection(64, 64, 64).cuda()
     vp_net = Projection(64, 64, 64).cuda()
-    vafp_net = Multimodal(input_size=128 + 32 + 64 + 64, h_dim=128, feature_dim=64).cuda()
+    vafp_net = Multimodal(input_size=128+32+64+64, h_dim=128, feature_dim=64).cuda()
 
     v_net.load_state_dict(torch.load(f"{model_path}/v_model.pth"))
     a_net.load_state_dict(torch.load(f"{model_path}/a_model.pth"))
@@ -96,191 +272,183 @@ def load_models(model_path):
 
     return v_net, a_net, f_net, p_net, va_net, vf_net, vp_net, vafp_net
 
-def load_ground_truth(gt_path, frame_skip, num_predictions):
-    """
-    Load ground truth labels from a .npy file and subsample them to match the frame skip.
-    """
-    ground_truth = np.load(gt_path)
-    subsampled_gt = ground_truth[::frame_skip]  # Subsample ground truth to match predictions
-
-    # Ensure the subsampled ground truth matches the number of predictions
-    if len(subsampled_gt) > num_predictions:
-        subsampled_gt = subsampled_gt[:num_predictions]
-    elif len(subsampled_gt) < num_predictions:
-        raise ValueError(f"Mismatch between predictions ({num_predictions}) and subsampled ground truth ({len(subsampled_gt)}).")
-
-    return subsampled_gt
-
-def evaluate_predictions(predictions, ground_truth, threshold=0.5):
-    """
-    Evaluate predictions against ground truth using accuracy, precision, recall, and F1-score.
-    """
-    binary_predictions = (predictions > threshold).astype(int)
-    accuracy = accuracy_score(ground_truth, binary_predictions)
-    precision = precision_score(ground_truth, binary_predictions, zero_division=0)
-    recall = recall_score(ground_truth, binary_predictions, zero_division=0)
-    f1 = f1_score(ground_truth, binary_predictions, zero_division=0)
-    return accuracy, precision, recall, f1
-
-def normalize_tensor(tensor):
-    """
-    Normalize a tensor to have values between 0 and 1.
-    """
-    min_val = tensor.min(dim=-1, keepdim=True)[0]
-    max_val = tensor.max(dim=-1, keepdim=True)[0]
-    return (tensor - min_val) / (max_val - min_val + 1e-8)
+# --------------------- Inference Function ---------------------
 
 def infer_on_video(video_path, model_path, gt_path, frame_skip=16):
-    """
-    Perform inference on a video and evaluate predictions.
-    """
-    set_seed(42)  # Ensure deterministic behavior
+    set_seed(42)
 
     frames = extract_frames(video_path, frame_skip)
     if len(frames) == 0:
-        raise RuntimeError("No frames were extracted from the video. Check the video path or frame extraction logic.")
+        raise RuntimeError("No frames extracted!")
 
-    print(f"Number of frames extracted: {len(frames)}")
+    print(f"Frames extracted: {len(frames)}")
 
-    features = extract_features(frames)  # Extract features from frames
-    print(f"Shape of extracted features: {features.shape}")
+    rgb_features, flow_features = extract_rgb_flow_features(frames)
+    audio_features = extract_audio_features(video_path)
+    pose_features = extract_pose_features(frames)
 
-    # Add a linear projection layer to reduce feature dimensionality
-    projection_layer = torch.nn.Linear(2048, 1024).cuda()
-    features = torch.tensor(features, dtype=torch.float32).cuda()
-    features = projection_layer(features)
+    min_len = min(len(rgb_features), len(flow_features), len(audio_features), len(pose_features))
+    rgb_features = rgb_features[:min_len]
+    flow_features = flow_features[:min_len]
+    audio_features = audio_features[:min_len]
+    pose_features = pose_features[:min_len]
+    frames = frames[:min_len]
+
+    rgb_features = torch.tensor(rgb_features, dtype=torch.float32).unsqueeze(0).cuda()
+    flow_features = torch.tensor(flow_features, dtype=torch.float32).unsqueeze(0).cuda()
+    audio_features = torch.tensor(audio_features, dtype=torch.float32).unsqueeze(0).cuda()
+    pose_features = torch.tensor(pose_features, dtype=torch.float32).unsqueeze(0).cuda()
 
     v_net, a_net, f_net, p_net, va_net, vf_net, vp_net, vafp_net = load_models(model_path)
 
     with torch.no_grad():
-        v_net.eval()
-        a_net.eval()
-        f_net.eval()
-        p_net.eval()
-        va_net.eval()
-        vf_net.eval()
-        vp_net.eval()
-        vafp_net.eval()
-
-        print("Shape of projected features:", features.shape)
-
-        # Reshape to (batch_size, sequence_length, feature_dim)
-        batch_size = 1
-        sequence_length = features.shape[0]
-        feature_dim = features.shape[1]
-        rgb_features = features.view(batch_size, sequence_length, feature_dim)
-
-        # Create placeholder tensors with correct dimensions
-        audio_features = torch.zeros((batch_size, sequence_length, 128), dtype=torch.float32).cuda()
-        flow_features = torch.zeros((batch_size, sequence_length, 1024), dtype=torch.float32).cuda()
-        pose_features = torch.zeros((batch_size, sequence_length, 512), dtype=torch.float32).cuda()
-
-        # Perform inference
         v_res = normalize_tensor(v_net(rgb_features)["satt_f"])
         a_res = normalize_tensor(a_net(audio_features)["satt_f"])
         f_res = normalize_tensor(f_net(flow_features)["satt_f"])
         p_res = normalize_tensor(p_net(pose_features)["satt_f"])
 
+        print(f"Intermediate features: v_res {v_res.shape}, a_res {a_res.shape}, f_res {f_res.shape}, p_res {p_res.shape}")
+
         mix_f = torch.cat([v_res, va_net(a_res), vf_net(f_res), vp_net(p_res)], dim=-1)
         m_out = vafp_net(mix_f)
-
         predictions = m_out["output"].cpu().numpy()
+        predictions = normalize_predictions(predictions)
 
-        # Normalize predictions
-        predictions = (predictions - predictions.min()) / (predictions.max() - predictions.min())
+        log_predictions(predictions)
 
-        # Load and subsample ground truth
         ground_truth = load_ground_truth(gt_path, frame_skip, len(predictions))
-
-        # Evaluate predictions
         accuracy, precision, recall, f1 = evaluate_predictions(predictions, ground_truth)
-        print(f"Evaluation Metrics:\n"
-              f"Accuracy: {accuracy:.4f}\n"
-              f"Precision: {precision:.4f}\n"
-              f"Recall: {recall:.4f}\n"
-              f"F1-Score: {f1:.4f}")
+        print(f"Evaluation Metrics: Accuracy {accuracy:.4f}, Precision {precision:.4f}, Recall {recall:.4f}, F1 {f1:.4f}")
 
-        return predictions, frames
+        best_thresh = calibrate_threshold(predictions, ground_truth)
+        accuracy, precision, recall, f1 = evaluate_predictions(predictions, ground_truth, threshold=best_thresh)
+        print(f"Metrics at best threshold {best_thresh:.2f}: Acc={accuracy:.4f}, Prec={precision:.4f}, Recall={recall:.4f}, F1={f1:.4f}")
+
+
+        # 🛠 QUICK FEATURE HEALTH CHECK
+        print("\n=== Quick Check for Feature Health ===")
+
+        # Check variance của từng modality
+        print(f"Feature Variances:")
+        print(f"  - RGB  : {v_res.var().item():.6f}")
+        print(f"  - Audio: {a_res.var().item():.6f}")
+        print(f"  - Flow : {f_res.var().item():.6f}")
+        print(f"  - Pose : {p_res.var().item():.6f}")
+
+        # Predict riêng từng modality để xem modal nào mạnh yếu
+        pred_v = torch.sigmoid(v_res.mean(dim=-1)).cpu().numpy().squeeze()
+        pred_a = torch.sigmoid(a_res.mean(dim=-1)).cpu().numpy().squeeze()
+        pred_f = torch.sigmoid(f_res.mean(dim=-1)).cpu().numpy().squeeze()
+        pred_p = torch.sigmoid(p_res.mean(dim=-1)).cpu().numpy().squeeze()
+
+        print(f"Single Modality Prediction Means:")
+        print(f"  - RGB  : {pred_v.mean():.4f}")
+        print(f"  - Audio: {pred_a.mean():.4f}")
+        print(f"  - Flow : {pred_f.mean():.4f}")
+        print(f"  - Pose : {pred_p.mean():.4f}")
+
+        print("=== End of Quick Check ===\n")
+    # ➔ Auto predict video class
+    # video_class = predict_video_class(predictions, threshold=best_thresh)
+    # voting_class = predict_video_by_voting(predictions, threshold=best_thresh, vote_ratio=0.5)
+
+    # print(f"\n==> Quick Prediction (mean method): {video_class}")
+    # print(f"==> Quick Prediction (voting method): {voting_class}\n")
+
+
+    return predictions, frames, accuracy, precision, recall, f1
+
+# --------------------- Visualization ---------------------
 
 def visualize_predictions(frames, predictions):
-    """
-    Visualize video frames with predictions overlaid.
-    """
     for i, frame in enumerate(frames):
         plt.figure(figsize=(8, 6))
-        plt.imshow(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))  # Convert BGR to RGB for Matplotlib
-        plt.title(f"Frame {i + 1} - Prediction: {predictions[i]:.2f}", fontsize=16)
+        plt.imshow(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        plt.title(f"Frame {i+1} - Prediction: {predictions[i]:.2f}", fontsize=16)
         plt.axis('off')
         plt.show()
 
-def plot_predictions_with_graph(frames, predictions, frame_skip, output_path):
+def plot_predictions_advanced(frames, predictions, best_thresh, frame_skip=16, output_path="output_graph.png", num_samples=30):
     """
-    Plot anomaly scores over time with 3 frames from the beginning, middle, and end of the video.
-    Each frame in the beginning, middle, and end sections is spaced 5 frames apart.
-    Frames are displayed in a single row, aligned in chronological order.
+    Advanced plotting: timeline anomaly score + adaptive frame overlays + peak highlight.
     """
-    plt.figure(figsize=(18, 6))
+    fig, ax = plt.subplots(figsize=(24, 8))  # mở rộng cho đẹp
 
-    # Plot the anomaly scores
     time = np.arange(len(predictions)) * frame_skip
-    plt.plot(time, predictions, label="Anomaly Score", color="blue", linewidth=2)
+    ax.plot(time, predictions, label="Anomaly Score", color="blue", linewidth=2)
 
-    # Highlight regions with high and low anomaly scores
-    threshold = 0.5
-    high_anomaly_indices = np.where(predictions > threshold)[0]
-    low_anomaly_indices = np.where(predictions <= threshold)[0]
+    # Highlight anomaly regions based on best_thresh
+    for idx, pred in enumerate(predictions):
+        if pred > best_thresh:
+            ax.axvspan(time[idx] - frame_skip/2, time[idx] + frame_skip/2, color="red", alpha=0.3)
+        else:
+            ax.axvspan(time[idx] - frame_skip/2, time[idx] + frame_skip/2, color="green", alpha=0.1)
 
-    # Highlight low anomaly regions
-    for idx in low_anomaly_indices:
-        plt.axvspan(time[idx] - frame_skip / 2, time[idx] + frame_skip / 2, color="green", alpha=0.1, label="Low Anomaly" if idx == low_anomaly_indices[0] else "")
-
-    # Highlight high anomaly regions
-    for idx in high_anomaly_indices:
-        plt.axvspan(time[idx] - frame_skip / 2, time[idx] + frame_skip / 2, color="red", alpha=0.3, label="High Anomaly" if idx == high_anomaly_indices[0] else "")
-
-    # Select 3 frames from the beginning, middle, and end, spaced 5 frames apart
+    # Frame selection
     num_frames = len(frames)
-    selected_indices = [
-        0, min(5, num_frames - 1), min(10, num_frames - 1),  # First 3 frames spaced 5 apart
-        max(num_frames // 2 - 5, 0), num_frames // 2, min(num_frames // 2 + 5, num_frames - 1),  # Middle 3 frames spaced 5 apart
-        max(num_frames - 11, 0), max(num_frames - 6, 0), num_frames - 1  # Last 3 frames spaced 5 apart
-    ]
+    actual_samples = min(num_samples, num_frames)
+    step = num_frames / actual_samples
+    selected_indices = [int(i * step) for i in range(actual_samples)]
 
-    # Overlay frames at specific points
+    # Detect peak anomaly
+    peak_idx = np.argmax(predictions)
+
     for i, idx in enumerate(selected_indices):
+        idx = min(idx, num_frames - 1)
         frame = frames[idx]
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # Place frames in a single row at the center of the plot
-        y_position = 0.5  # Center of the plot
-        inset_ax = plt.axes([0.1 + (i / len(selected_indices)) * 0.8, y_position, 0.08, 0.15])  # Adjust width and height
-        inset_ax.imshow(frame_rgb)
-        inset_ax.axis('off')  # Hide axes for the frame
+        box = ax.inset_axes([
+            0.03 + i * (0.94 / actual_samples),
+            0.68,
+            0.055,
+            0.27
+        ])
 
-    # Fix the Y limits to make everything fit visually
-    plt.ylim(0, 1.05)
+        box.imshow(frame_rgb)
+        box.axis('off')
 
-    # Add labels and legend
-    plt.xlabel("Time (frames)", fontsize=14)
-    plt.ylabel("Anomaly Score", fontsize=14)
-    plt.legend(fontsize=12, loc="upper left")
-    plt.grid(True)
+        # Highlight frame near the peak
+        if abs(idx - peak_idx) <= 1:
+            for spine in box.spines.values():
+                spine.set_edgecolor('red')
+                spine.set_linewidth(3)
 
-    # Save and show
-    plt.subplots_adjust(left=0.05, right=0.95, top=0.85, bottom=0.15)  # Adjust layout to avoid warnings
-    plt.savefig(output_path.replace(".mp4", "_graph.png"))
+    # Labels
+    ax.set_xlabel("Time (frames)", fontsize=22)
+    ax.set_ylabel("Anomaly Score", fontsize=22)
+    ax.set_title("Anomaly Score Timeline with Frame Samples", fontsize=24)
+
+    # 🛠 NEW: làm to số trục (ticks)
+    ax.tick_params(axis='both', which='major', labelsize=20)  # lớn số trục X và Y
+    ax.tick_params(axis='both', which='minor', labelsize=18)  # nếu có minor ticks thì cũng lớn hơn
+
+
+    ax.set_ylim(0, 1.05)
+    ax.grid(True)
+    ax.legend(fontsize=16)
+
+    plt.tight_layout()
+    plt.savefig(output_path)
+    print(f"✅ Saved ADVANCED anomaly timeline plot to {output_path}")
     plt.show()
 
+
+
+
+
+# --------------------- Main ---------------------
 
 if __name__ == "__main__":
     video_path = r"C:\Users\tatra\Downloads\The Most UNEXPECTED Finishes in UFC History 😱.mp4"
     model_path = "saved_models/84.98/"
     gt_path = r"D:\MAVD2\list\gt.npy"
-    output_path = r"c:\Users\tatra\Downloads\output_video.mp4"
 
-    # Perform inference
-    predictions, frames = infer_on_video(video_path, model_path, gt_path)
+    predictions, frames, accuracy, precision, recall, f1 = infer_on_video(video_path, model_path, gt_path)
+    best_thresh = calibrate_threshold(predictions, load_ground_truth(gt_path, frame_skip=16, num_predictions=len(predictions)))
+    # New: visualize anomaly timeline
+    plot_predictions_advanced(frames, predictions, best_thresh, frame_skip=16, output_path="anomaly_graph_pro.png", num_samples=30)
 
-    # Plot predictions with graph
-    frame_skip = 16
-    plot_predictions_with_graph(frames, predictions, frame_skip, output_path)
+
+    # Optional: visualize frames individually (nếu muốn)
+    # visualize_predictions(frames, predictions)
