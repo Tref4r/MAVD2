@@ -6,7 +6,6 @@
     <img src=pipeline_violence.png width="800" height="300"/>
 </p>
 
-[Paper Link](https://arxiv.org/abs/2501.07496) | [Code](https://github.com/Tref4r/MAVD2/tree/release/1.0)
 
 ## Abstract
 With the rapid increase in video data and the growing need for security and public safety, detecting abnormal
