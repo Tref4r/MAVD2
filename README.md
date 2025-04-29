@@ -1,4 +1,4 @@
-# MAVD
+# MFT
   Multi-Modal Fusion Techniques for Abnormal Events
   Detection in Videos
 
