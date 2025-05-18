@@ -16,9 +16,9 @@ import io
 import soundfile as sf
 
 from dataset.dataset_loader import Dataset
-from model.unimodal import Unimodal
-from model.multimodal import Multimodal
-from model.projection import Projection
+from Model.unimodal import Unimodal
+from Model.multimodal import Multimodal
+from Model.projection import Projection
 from utils.utils import process_feat
 from get_feats_pose import send_video
 from interpolate import interpolate_npy
@@ -445,6 +445,41 @@ def plot_predictions_advanced(frames, predictions, best_thresh, frame_skip=16, o
     print(f"✅ Saved ADVANCED anomaly timeline plot to {output_path}")
     plt.show()
 
+def save_video_with_predictions(frames, predictions, output_path="output_video.mp4", fps=24):
+    """
+    Save video with overlaid prediction scores.
+    """
+    height, width = frames[0].shape[:2]
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+
+    for i, frame in enumerate(frames):
+        pred_score = predictions[i]
+        overlay = frame.copy()
+
+        # Draw anomaly score at bottom-left with background
+        text = f"Anomaly Score: {pred_score:.2f}"
+        (text_width, text_height), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+        cv2.rectangle(overlay, (10, height - 40), (10 + text_width + 10, height - 15), (0, 0, 0), -1)  # black background
+        cv2.putText(overlay, text, (15, height - 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0) if pred_score <= 0.5 else (0, 0, 255), 2)
+
+
+        # Optional: draw horizontal bar
+        bar_width = int(pred_score * width)
+        cv2.rectangle(overlay, (0, height - 20), (bar_width, height - 5),
+                      (0, 0, 255) if pred_score > 0.5 else (0, 255, 0), -1)
+
+        out.write(overlay)
+
+    out.release()
+    print(f"✅ Saved video with predictions to: {output_path}")
+
+def get_fps_from_video(video_path):
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    cap.release()
+    return fps
 
 
 
@@ -452,8 +487,8 @@ def plot_predictions_advanced(frames, predictions, best_thresh, frame_skip=16, o
 # --------------------- Main ---------------------
 
 if __name__ == "__main__":
-    video_path = "5495946b-9a22-42d8-a10f-b17c267ba22b.mp4"
-    model_path = "Model/Model_Infer"
+    video_path = "36 khối diễu binh lần đầu tham gia hợp luyện.mp4"
+    model_path = "Model/Model_Infer/84.98"
     gt_path = "list/gt.npy"
 
     predictions, frames, accuracy, precision, recall, f1 = infer_on_video(video_path, model_path, gt_path)
@@ -461,6 +496,12 @@ if __name__ == "__main__":
     # New: visualize anomaly timeline
     plot_predictions_advanced(frames, predictions, best_thresh, frame_skip=16, output_path="anomaly_graph_pro.png", num_samples=30)
 
+    # Save video with predictions overlay
+    # ✅ Lấy đúng fps gốc từ video đầu vào
+    fps = get_fps_from_video(video_path)
+    print(f"⚙️ Original video FPS: {fps}")
+     # ✅ Dùng FPS thật khi render video output
+    save_video_with_predictions(frames, predictions, output_path="output_with_scores.mp4", fps=fps)
 
     # Optional: visualize frames individually (nếu muốn)
     # visualize_predictions(frames, predictions)
